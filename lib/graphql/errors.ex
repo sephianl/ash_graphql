@@ -85,7 +85,23 @@ defmodule AshGraphql.Errors do
   # Builds the error path by combining GraphQL input path, Ash.Error.path, and field name.
   # Uses type-aware resolution for composite types (union, map, struct, NewType) so nested
   # path segments match the schema expansion.
+  #
+  # Wrapped in try/rescue so a bug in path resolution never swallows the underlying
+  # business error — the caller still gets a usable error map with path: nil.
   defp build_error_path(error, error_map, graphql_path, resource, action) do
+    do_build_error_path(error, error_map, graphql_path, resource, action)
+  rescue
+    exception ->
+      Logger.warning(
+        "AshGraphql.Errors.build_error_path crashed; falling back to nil path. " <>
+          "Original error: #{inspect(error)}. " <>
+          "Formatter exception: #{Exception.format(:error, exception, __STACKTRACE__)}"
+      )
+
+      nil
+  end
+
+  defp do_build_error_path(error, error_map, graphql_path, resource, action) do
     base_path =
       case graphql_path do
         nil -> []
@@ -185,7 +201,9 @@ defmodule AshGraphql.Errors do
   end
 
   defp resolve_union_segment(segment, context) do
-    types = context.constraints[:types] || context.constraints["types"] || %{}
+    types =
+      safe_lookup(context.constraints, :types) || safe_lookup(context.constraints, "types") || %{}
+
     segment_atom = segment_to_atom(segment)
 
     config =
@@ -219,7 +237,10 @@ defmodule AshGraphql.Errors do
   end
 
   defp resolve_map_struct_segment(segment, context) do
-    fields = context.constraints[:fields] || context.constraints["fields"] || []
+    fields =
+      safe_lookup(context.constraints, :fields) || safe_lookup(context.constraints, "fields") ||
+        []
+
     segment_atom = segment_to_atom(segment)
 
     field_config =
@@ -258,7 +279,10 @@ defmodule AshGraphql.Errors do
         {:array, inner} -> inner
         _ -> nil
       end
-    elem_constraints = context.constraints[:items] || context.constraints["items"] || []
+
+    elem_constraints =
+      safe_lookup(context.constraints, :items) || safe_lookup(context.constraints, "items") || []
+
     {elem_type, elem_constraints} = unwrap_type(elem_type, elem_constraints)
     inner_context = %{context | type: elem_type, constraints: elem_constraints}
     resolve_segment_with_context(segment, inner_context)
@@ -287,6 +311,19 @@ defmodule AshGraphql.Errors do
         to_string(segment)
     end
   end
+
+  # Safe wrapper around Access-style lookup on constraints/config values.
+  # Returns nil instead of raising when the value isn't a map or proper keyword list
+  # (e.g. a binary, atom, or list containing non-tuple entries). Defensive because
+  # constraints can flow in from user-defined Ash.Type.NewType implementations whose
+  # shapes we can't fully predict.
+  defp safe_lookup(map, key) when is_map(map), do: Map.get(map, key)
+
+  defp safe_lookup(list, key) when is_list(list) and is_atom(key) do
+    if Keyword.keyword?(list), do: Keyword.get(list, key)
+  end
+
+  defp safe_lookup(_, _), do: nil
 
   defp segment_to_atom(segment) when is_atom(segment), do: segment
 
@@ -319,7 +356,9 @@ defmodule AshGraphql.Errors do
         :array
 
       type in [:map, Ash.Type.Map, :struct, Ash.Type.Struct] ->
-        if (constraints[:fields] || constraints["fields"] || []) != [], do: :map_struct, else: nil
+        if (safe_lookup(constraints, :fields) || safe_lookup(constraints, "fields") || []) != [],
+          do: :map_struct,
+          else: nil
 
       true ->
         if new_type?(type) do

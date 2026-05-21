@@ -1259,6 +1259,132 @@ defmodule AshGraphql.ErrorsTest do
       assert [%{code: "forbidden", fields: [], path: ["input", "nested"]}] = errors
     end
 
+    test "build_error_path does not crash when a :map argument's constraints are malformed" do
+      error =
+        Ash.Error.Changes.InvalidAttribute.exception(field: :something, message: "invalid")
+        |> Ash.Error.set_path([:weird_arg, :inner])
+
+      action = %{
+        name: :test_action,
+        arguments: [%{name: :weird_arg, type: :map, constraints: "fields"}]
+      }
+
+      errors =
+        AshGraphql.Errors.to_errors(
+          [error],
+          %{},
+          AshGraphql.Test.Domain,
+          AshGraphql.Test.Post,
+          action,
+          ["input"]
+        )
+
+      assert [%{code: "invalid_attribute", path: path}] = errors
+      assert is_list(path) or is_nil(path)
+    end
+
+    test "build_error_path does not crash when an Ash.Type.Union argument's constraints are malformed" do
+      error =
+        Ash.Error.Changes.InvalidAttribute.exception(field: :something, message: "invalid")
+        |> Ash.Error.set_path([:weird_arg, :variant, :inner])
+
+      action = %{
+        name: :test_action,
+        arguments: [%{name: :weird_arg, type: Ash.Type.Union, constraints: "types"}]
+      }
+
+      errors =
+        AshGraphql.Errors.to_errors(
+          [error],
+          %{},
+          AshGraphql.Test.Domain,
+          AshGraphql.Test.Post,
+          action,
+          ["input"]
+        )
+
+      assert [%{code: "invalid_attribute", path: path}] = errors
+      assert is_list(path) or is_nil(path)
+    end
+
+    test "build_error_path does not crash when an array argument's constraints are malformed" do
+      error =
+        Ash.Error.Changes.InvalidAttribute.exception(field: :something, message: "invalid")
+        |> Ash.Error.set_path([:weird_arg, 0, :inner])
+
+      action = %{
+        name: :test_action,
+        arguments: [%{name: :weird_arg, type: {:array, :map}, constraints: "items"}]
+      }
+
+      errors =
+        AshGraphql.Errors.to_errors(
+          [error],
+          %{},
+          AshGraphql.Test.Domain,
+          AshGraphql.Test.Post,
+          action,
+          ["input"]
+        )
+
+      assert [%{code: "invalid_attribute", path: path}] = errors
+      assert is_list(path) or is_nil(path)
+    end
+
+    test "build_error_path does not crash when a :map field's constraints are malformed" do
+      error =
+        Ash.Error.Changes.InvalidAttribute.exception(field: :something, message: "invalid")
+        |> Ash.Error.set_path([:outer, :inner_field, :leaf])
+
+      action = %{
+        name: :test_action,
+        arguments: [
+          %{
+            name: :outer,
+            type: :map,
+            constraints: [
+              fields: [
+                inner_field: [type: :map, constraints: "fields"]
+              ]
+            ]
+          }
+        ]
+      }
+
+      errors =
+        AshGraphql.Errors.to_errors(
+          [error],
+          %{},
+          AshGraphql.Test.Domain,
+          AshGraphql.Test.Post,
+          action,
+          ["input"]
+        )
+
+      assert [%{code: "invalid_attribute", path: path}] = errors
+      assert is_list(path) or is_nil(path)
+    end
+
+    test "build_error_path rescues unexpected crashes and still surfaces the underlying error" do
+      error =
+        Ash.Error.Changes.InvalidAttribute.exception(field: :something, message: "invalid")
+        |> Ash.Error.set_path([:any_arg])
+
+      action = %{name: :test_action, arguments: "not_a_list"}
+
+      errors =
+        AshGraphql.Errors.to_errors(
+          [error],
+          %{},
+          AshGraphql.Test.Domain,
+          AshGraphql.Test.Post,
+          action,
+          ["input"]
+        )
+
+      assert [%{code: "invalid_attribute", path: nil}] = errors
+    end
+
     test "path resolves through {:array, :map} argument without crashing" do
       error =
         Ash.Error.Changes.InvalidAttribute.exception(
